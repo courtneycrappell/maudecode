@@ -5,17 +5,25 @@ import { runAgent, type ConversationHistory, buildSystemPrompt } from "./agent.j
 import { getToolSummaries } from "./tools/index.js"
 import type { MaudeConfig } from "./config.js"
 
-const HELP = `
+function buildHelp(model: string) {
+  return `
 Commands:
-  .help     Show this message
-  .tools    List all available tools
-  .clear    Reset conversation history
-  .history  Show number of messages in current session
-  .exit     Exit maude
-  .quit     Exit maude
+  .help            Show this message
+  .tools           List all available tools
+  .model           Show current model
+  .model <name>    Switch model (e.g. .model qwen2.5:7b)
+  .clear           Reset conversation history
+  .history         Show number of messages in current session
+  .exit            Exit maude
+  .quit            Exit maude
+
+Model tips:
+  qwen2.5:7b           Best for writing, email, general tasks
+  qwen2.5-coder:14b    Best for coding and file work (current: ${model})
 
 Just type your request and press Enter.
 `
+}
 
 export async function startRepl(config: MaudeConfig, client: OpenAI): Promise<void> {
   const rl = readline.createInterface({
@@ -24,7 +32,8 @@ export async function startRepl(config: MaudeConfig, client: OpenAI): Promise<vo
     prompt: chalk.green("maude> "),
   })
 
-  console.log(chalk.dim(`maude v0.1.0 · model: ${config.model} · .help for commands`))
+  let currentModel = config.model
+  console.log(chalk.dim(`maude v0.1.0 · model: ${currentModel} · .help for commands`))
 
   let history: ConversationHistory = [{ role: "system", content: buildSystemPrompt() }]
 
@@ -44,13 +53,27 @@ export async function startRepl(config: MaudeConfig, client: OpenAI): Promise<vo
     }
 
     if (input === ".help") {
-      console.log(HELP)
+      console.log(buildHelp(currentModel))
       rl.prompt()
       return
     }
 
     if (input === ".tools") {
       console.log(chalk.dim("\nAvailable tools:\n") + getToolSummaries().join("\n") + "\n")
+      rl.prompt()
+      return
+    }
+
+    if (input === ".model" || input.startsWith(".model ")) {
+      const arg = input.slice(".model".length).trim()
+      if (!arg) {
+        console.log(chalk.dim(`Current model: ${currentModel}`))
+      } else {
+        currentModel = arg
+        config.model = arg
+        history = [{ role: "system", content: buildSystemPrompt() }]
+        console.log(chalk.dim(`Switched to ${currentModel}. History cleared.`))
+      }
       rl.prompt()
       return
     }
