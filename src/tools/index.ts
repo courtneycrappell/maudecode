@@ -85,12 +85,12 @@ const TOOLS: ToolEntry[] = [
       type: "function",
       function: {
         name: "find_files",
-        description: "Find files matching a name pattern in a directory.",
+        description: "Locate files by filename or extension. Use this when the user wants to find a file by name or type (e.g. '*.xlsx', 'resume*'). Search ~ or ~/Documents when looking for user files. Do NOT use this to search file contents.",
         parameters: {
           type: "object",
           properties: {
-            pattern: { type: "string", description: "Filename pattern (e.g. *.ts)" },
-            dir: { type: "string", description: "Directory to search (default: .)" },
+            pattern: { type: "string", description: "Filename pattern (e.g. *.xlsx, report*.pdf, marcus*)" },
+            dir: { type: "string", description: "Directory to search (use ~ or ~/Documents for user files; default: .)" },
           },
           required: ["pattern"],
         },
@@ -103,11 +103,11 @@ const TOOLS: ToolEntry[] = [
       type: "function",
       function: {
         name: "grep_files",
-        description: "Search for a pattern in files using grep.",
+        description: "Search inside file contents for a text pattern. Use this only when you need to find text within files, not to locate files by name.",
         parameters: {
           type: "object",
           properties: {
-            pattern: { type: "string", description: "Search pattern" },
+            pattern: { type: "string", description: "Text pattern to search for inside files" },
             dir: { type: "string", description: "Directory to search (default: .)" },
             flags: { type: "string", description: "grep flags (default: -r)" },
           },
