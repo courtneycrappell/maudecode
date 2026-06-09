@@ -1,0 +1,22 @@
+{
+  "name": "maude",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "openai": "^4",
+    "commander": "^12",
+    "chalk": "^5",
+    "ora": "^8"
+  },
+  "devDependencies": {
+    "tsx": "^4",
+    "typescript": "^5",
+    "@types/node": "^20",
+    "vitest": "^1"
+  }
+}
