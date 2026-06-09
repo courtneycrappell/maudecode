@@ -7,31 +7,42 @@ import type { MaudeConfig } from "./config.js"
 
 const SYSTEM_PROMPT = `You are maude, a local coding assistant. Use tools to read, write, and run code. Be concise.
 
-When the user asks to find or locate a file they created, use find_files and search their home directory (~) and common locations like ~/Desktop, ~/Documents, ~/Downloads — not just the current directory.
-Use find_files to locate files by name or extension. Use grep_files only to search inside file contents.`
+When the user asks to find or locate a file they created, use find_files. Search specific directories one at a time: ~/Desktop, ~/Documents, ~/Downloads, ~/iCloud Drive. Do NOT search ~ directly — it times out.
+Use find_files to locate files by name or extension. Use grep_files only to search inside file contents.
+Call one tool at a time. Do not output lists of tool calls — call one, wait for the result, then call the next.`
+
+type EmbeddedCall = { name: string; args: Record<string, string> }
 
 // Some models (e.g. qwen2.5-coder) output tool calls as JSON text in the content
-// field instead of using the proper tool_calls API format. Detect and handle both.
-function tryParseEmbeddedToolCall(content: string): { name: string; args: Record<string, string> } | null {
-  // Try the full content first (pure JSON or fenced block)
+// field instead of using the proper tool_calls API format. Detect and handle both
+// single-call and array-of-calls formats, with optional leading explanation text.
+function tryParseEmbeddedToolCalls(content: string): EmbeddedCall[] {
   const candidates = [
     content.trim().replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, ""),
   ]
-  // Also extract the last {...} block in case model prepended explanatory text
-  const lastBrace = content.lastIndexOf("{")
-  if (lastBrace !== -1) candidates.push(content.slice(lastBrace))
+  // Extract from first [ or { in case model prepended explanatory text
+  const firstBracket = content.search(/[[{]/)
+  if (firstBracket > 0) candidates.push(content.slice(firstBracket))
 
   for (const candidate of candidates) {
     try {
       const parsed = JSON.parse(candidate)
+      // Array of tool calls
+      if (Array.isArray(parsed)) {
+        const calls = parsed.filter(
+          (item) => typeof item?.name === "string" && item?.arguments && typeof item.arguments === "object"
+        )
+        if (calls.length > 0) return calls.map((c) => ({ name: c.name, args: c.arguments as Record<string, string> }))
+      }
+      // Single tool call
       if (typeof parsed.name === "string" && parsed.arguments && typeof parsed.arguments === "object") {
-        return { name: parsed.name, args: parsed.arguments as Record<string, string> }
+        return [{ name: parsed.name, args: parsed.arguments as Record<string, string> }]
       }
     } catch {
       // not valid JSON
     }
   }
-  return null
+  return []
 }
 
 export async function runAgent(userMessage: string, config: MaudeConfig, client: OpenAI): Promise<string> {
@@ -66,14 +77,18 @@ export async function runAgent(userMessage: string, config: MaudeConfig, client:
       }
     } else {
       const content = choice.message.content ?? ""
-      const embedded = tryParseEmbeddedToolCall(content)
-      if (embedded) {
-        process.stdout.write(chalk.cyan(`⚙ ${embedded.name} `) + chalk.dim(JSON.stringify(embedded.args)) + "\n")
-        const result = await dispatchTool(embedded.name, embedded.args)
-        const preview = result.length > 120 ? result.slice(0, 120) + "…" : result
-        process.stdout.write(chalk.dim(`  → ${preview}\n`))
-        // Models that use this format don't understand role:"tool" — send result as user message
-        messages.push({ role: "user", content: `Tool \`${embedded.name}\` result:\n${result}` })
+      const embedded = tryParseEmbeddedToolCalls(content)
+      if (embedded.length > 0) {
+        const results: string[] = []
+        for (const call of embedded) {
+          process.stdout.write(chalk.cyan(`⚙ ${call.name} `) + chalk.dim(JSON.stringify(call.args)) + "\n")
+          const result = await dispatchTool(call.name, call.args)
+          const preview = result.length > 120 ? result.slice(0, 120) + "…" : result
+          process.stdout.write(chalk.dim(`  → ${preview}\n`))
+          results.push(`Tool \`${call.name}\` result:\n${result}`)
+        }
+        // Models that use this format don't understand role:"tool" — send results as user message
+        messages.push({ role: "user", content: results.join("\n\n") })
       } else {
         return content
       }
