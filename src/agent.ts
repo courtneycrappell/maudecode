@@ -24,29 +24,34 @@ function tryParseEmbeddedToolCalls(content: string): EmbeddedCall[] {
   const firstBracket = stripped.search(/[[{]/)
   if (firstBracket > 0) candidates.push(stripped.slice(firstBracket))
 
+  // Also try each line individually (NDJSON: model outputs one JSON object per line)
+  const lines = stripped.split("\n").map(l => l.trim()).filter(l => l.startsWith("{") || l.startsWith("["))
+  if (lines.length > 1) candidates.push(...lines)
+
+  // Normalise: accept both "name" and "function_name" as the tool name field
+  const normaliseName = (item: any): string | undefined =>
+    typeof item?.name === "string" ? item.name : typeof item?.function_name === "string" ? item.function_name : undefined
+
+  const isToolCall = (item: any) => normaliseName(item) && item?.arguments && typeof item.arguments === "object"
+  const toCall = (item: any): EmbeddedCall => ({ name: normaliseName(item)!, args: item.arguments as Record<string, string> })
+
+  const results: EmbeddedCall[] = []
   for (const candidate of candidates) {
     try {
       const parsed = JSON.parse(candidate)
-      // Normalise: accept both "name" and "function_name" as the tool name field
-      const normaliseName = (item: any): string | undefined =>
-        typeof item?.name === "string" ? item.name : typeof item?.function_name === "string" ? item.function_name : undefined
-
-      // Array of tool calls
       if (Array.isArray(parsed)) {
-        const calls = parsed.filter(
-          (item) => normaliseName(item) && item?.arguments && typeof item.arguments === "object"
-        )
-        if (calls.length > 0) return calls.map((c) => ({ name: normaliseName(c)!, args: c.arguments as Record<string, string> }))
+        const calls = parsed.filter(isToolCall)
+        if (calls.length > 0) return calls.map(toCall)
       }
-      // Single tool call
-      const toolName = normaliseName(parsed)
-      if (toolName && parsed.arguments && typeof parsed.arguments === "object") {
-        return [{ name: toolName, args: parsed.arguments as Record<string, string> }]
+      if (isToolCall(parsed)) {
+        results.push(toCall(parsed))
       }
     } catch {
       // not valid JSON
     }
   }
+  // Return NDJSON results if we collected any from individual lines
+  if (results.length > 0) return results
   return []
 }
 
