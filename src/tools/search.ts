@@ -12,7 +12,7 @@ export async function findFiles(pattern: string, dir = "."): Promise<string> {
   try {
     sanitize(pattern, "pattern")
     sanitize(dir, "dir")
-    return runBash(`find ${dir} -name "${pattern}" 2>/dev/null`)
+    return runBash(`find ${dir} -name "${pattern}" -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null`)
   } catch (e: any) {
     return `Error: ${e.message}`
   }
@@ -22,7 +22,7 @@ export async function grepFiles(pattern: string, dir = ".", flags = "-r"): Promi
   try {
     sanitize(pattern, "pattern")
     sanitize(dir, "dir")
-    return runBash(`grep ${flags} "${pattern}" ${dir} 2>/dev/null`)
+    return runBash(`grep ${flags} --exclude-dir=node_modules --exclude-dir=.git "${pattern}" ${dir} 2>/dev/null`)
   } catch (e: any) {
     return `Error: ${e.message}`
   }

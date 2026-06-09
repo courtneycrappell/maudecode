@@ -1,6 +1,5 @@
 import readline from "readline"
 import chalk from "chalk"
-import ora from "ora"
 import type OpenAI from "openai"
 import { runAgent } from "./agent.js"
 import type { MaudeConfig } from "./config.js"
@@ -44,14 +43,12 @@ export async function startRepl(config: MaudeConfig, client: OpenAI): Promise<vo
       return
     }
 
-    const spinner = ora({ text: "thinking…", color: "cyan" }).start()
+    process.stdout.write(chalk.dim("thinking…\n"))
 
     try {
       const result = await runAgent(input, config, client)
-      spinner.stop()
       console.log(chalk.white(result))
     } catch (e: any) {
-      spinner.stop()
       console.error(chalk.red(`Error: ${e.message}`))
     }
 
