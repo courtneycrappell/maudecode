@@ -12,7 +12,7 @@ export async function findFiles(pattern: string, dir = "."): Promise<string> {
   try {
     sanitize(pattern, "pattern")
     sanitize(dir, "dir")
-    return runBash(`find ${dir} -name "${pattern}" -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null`)
+    return runBash(`find ${dir} -maxdepth 8 -name "${pattern}" -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null`, 30_000)
   } catch (e: any) {
     return `Error: ${e.message}`
   }

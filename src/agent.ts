@@ -13,14 +13,23 @@ Use find_files to locate files by name or extension. Use grep_files only to sear
 // Some models (e.g. qwen2.5-coder) output tool calls as JSON text in the content
 // field instead of using the proper tool_calls API format. Detect and handle both.
 function tryParseEmbeddedToolCall(content: string): { name: string; args: Record<string, string> } | null {
-  const stripped = content.trim().replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "")
-  try {
-    const parsed = JSON.parse(stripped)
-    if (typeof parsed.name === "string" && parsed.arguments && typeof parsed.arguments === "object") {
-      return { name: parsed.name, args: parsed.arguments as Record<string, string> }
+  // Try the full content first (pure JSON or fenced block)
+  const candidates = [
+    content.trim().replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, ""),
+  ]
+  // Also extract the last {...} block in case model prepended explanatory text
+  const lastBrace = content.lastIndexOf("{")
+  if (lastBrace !== -1) candidates.push(content.slice(lastBrace))
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate)
+      if (typeof parsed.name === "string" && parsed.arguments && typeof parsed.arguments === "object") {
+        return { name: parsed.name, args: parsed.arguments as Record<string, string> }
+      }
+    } catch {
+      // not valid JSON
     }
-  } catch {
-    // not a tool call JSON
   }
   return null
 }
