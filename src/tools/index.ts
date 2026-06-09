@@ -2,6 +2,10 @@ import type { ChatCompletionTool } from "openai/resources/chat/completions.js"
 import { readFile, writeFile, editFile } from "./file.js"
 import { runBash } from "./bash.js"
 import { findFiles, grepFiles } from "./search.js"
+import { listDir, openFile } from "./system.js"
+import { readCsv } from "./csv.js"
+import { fetchUrl } from "./web.js"
+import { gitStatus, gitDiff, gitLog } from "./git.js"
 
 interface ToolEntry {
   schema: ChatCompletionTool
@@ -116,6 +120,128 @@ const TOOLS: ToolEntry[] = [
       },
     },
     handler: ({ pattern, dir, flags }) => grepFiles(pattern, dir, flags),
+  },
+  {
+    schema: {
+      type: "function",
+      function: {
+        name: "list_dir",
+        description: "List the contents of a directory (ls -la). Use to explore what's in a folder before reading or searching deeper.",
+        parameters: {
+          type: "object",
+          properties: {
+            dir: { type: "string", description: "Directory path to list (default: current directory)" },
+          },
+          required: [],
+        },
+      },
+    },
+    handler: ({ dir }) => listDir(dir),
+  },
+  {
+    schema: {
+      type: "function",
+      function: {
+        name: "open_file",
+        description: "Open a file with its default macOS application (e.g. Excel for .xlsx, Preview for .pdf). Use when the user wants to view or open a file.",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "File path to open" },
+          },
+          required: ["path"],
+        },
+      },
+    },
+    handler: ({ path }) => openFile(path),
+  },
+  {
+    schema: {
+      type: "function",
+      function: {
+        name: "read_csv",
+        description: "Read a CSV file and return column names, row count, and a preview of the first rows. Use for spreadsheet-like data files.",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "Path to the CSV file" },
+            max_rows: { type: "string", description: "Max rows to preview (default: 50)" },
+          },
+          required: ["path"],
+        },
+      },
+    },
+    handler: ({ path, max_rows }) => readCsv(path, max_rows ? parseInt(max_rows, 10) : undefined),
+  },
+  {
+    schema: {
+      type: "function",
+      function: {
+        name: "fetch_url",
+        description: "Fetch the text content of a web page or URL. Strips HTML tags. Use for research, looking up documentation, or reading online resources.",
+        parameters: {
+          type: "object",
+          properties: {
+            url: { type: "string", description: "Full URL to fetch (must start with http:// or https://)" },
+          },
+          required: ["url"],
+        },
+      },
+    },
+    handler: ({ url }) => fetchUrl(url),
+  },
+  {
+    schema: {
+      type: "function",
+      function: {
+        name: "git_status",
+        description: "Show git working tree status (modified, staged, untracked files).",
+        parameters: {
+          type: "object",
+          properties: {
+            dir: { type: "string", description: "Repository directory (default: current directory)" },
+          },
+          required: [],
+        },
+      },
+    },
+    handler: ({ dir }) => gitStatus(dir),
+  },
+  {
+    schema: {
+      type: "function",
+      function: {
+        name: "git_diff",
+        description: "Show git diff of uncommitted changes, or diff against a ref (branch, commit, HEAD~1, etc.).",
+        parameters: {
+          type: "object",
+          properties: {
+            dir: { type: "string", description: "Repository directory (default: current directory)" },
+            ref: { type: "string", description: "Optional ref to diff against (e.g. HEAD~1, main)" },
+          },
+          required: [],
+        },
+      },
+    },
+    handler: ({ dir, ref }) => gitDiff(dir, ref),
+  },
+  {
+    schema: {
+      type: "function",
+      function: {
+        name: "git_log",
+        description: "Show recent git commit history (one line per commit).",
+        parameters: {
+          type: "object",
+          properties: {
+            dir: { type: "string", description: "Repository directory (default: current directory)" },
+            n: { type: "string", description: "Number of commits to show (default: 10)" },
+          },
+          required: [],
+        },
+      },
+    },
+    handler: ({ dir, n }) => gitLog(dir, n ? parseInt(n, 10) : undefined),
   },
 ]
 

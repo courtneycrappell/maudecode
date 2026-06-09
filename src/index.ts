@@ -26,8 +26,8 @@ program
     }
 
     if (prompt) {
-      const result = await runAgent(prompt, config, client)
-      console.log(result)
+      const { text } = await runAgent(prompt, config, client)
+      console.log(text)
     } else {
       await startRepl(config, client)
     }

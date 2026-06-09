@@ -1,9 +1,11 @@
 import fs from "fs/promises"
 import path from "path"
+import { expandHome } from "../utils.js"
 
 const MAX_BYTES = 50 * 1024
 
 export async function readFile(filePath: string): Promise<string> {
+  filePath = expandHome(filePath)
   try {
     const buf = await fs.readFile(filePath)
 
@@ -24,6 +26,7 @@ export async function readFile(filePath: string): Promise<string> {
 }
 
 export async function writeFile(filePath: string, content: string): Promise<string> {
+  filePath = expandHome(filePath)
   try {
     await fs.mkdir(path.dirname(filePath), { recursive: true })
     await fs.writeFile(filePath, content, "utf8")
@@ -34,6 +37,7 @@ export async function writeFile(filePath: string, content: string): Promise<stri
 }
 
 export async function editFile(filePath: string, oldStr: string, newStr: string): Promise<string> {
+  filePath = expandHome(filePath)
   try {
     const content = await fs.readFile(filePath, "utf8")
     if (!content.includes(oldStr)) {

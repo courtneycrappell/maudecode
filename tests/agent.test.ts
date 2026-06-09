@@ -29,8 +29,8 @@ describe("runAgent", () => {
       choices: [{ finish_reason: "stop", message: { role: "assistant", content: "Hello!" } }],
     } as any)
 
-    const result = await runAgent("hi", mockConfig, mockClient)
-    expect(result).toBe("Hello!")
+    const { text } = await runAgent("hi", mockConfig, mockClient)
+    expect(text).toBe("Hello!")
   })
 
   it("dispatches a tool call and loops", async () => {
@@ -53,9 +53,9 @@ describe("runAgent", () => {
         choices: [{ finish_reason: "stop", message: { role: "assistant", content: "Done." } }],
       } as any)
 
-    const result = await runAgent("read foo.txt", mockConfig, mockClient)
+    const { text } = await runAgent("read foo.txt", mockConfig, mockClient)
     expect(dispatchTool).toHaveBeenCalledWith("read_file", { path: "foo.txt" })
-    expect(result).toBe("Done.")
+    expect(text).toBe("Done.")
   })
 
   it("sends tool error result back to LLM and continues", async () => {
@@ -80,7 +80,7 @@ describe("runAgent", () => {
         choices: [{ finish_reason: "stop", message: { role: "assistant", content: "File missing." } }],
       } as any)
 
-    const result = await runAgent("read missing.txt", mockConfig, mockClient)
-    expect(result).toBe("File missing.")
+    const { text } = await runAgent("read missing.txt", mockConfig, mockClient)
+    expect(text).toBe("File missing.")
   })
 })

@@ -5,11 +5,26 @@ import { chatCompletion } from "./llm.js"
 import { getToolSchemas, dispatchTool } from "./tools/index.js"
 import type { MaudeConfig } from "./config.js"
 
-const SYSTEM_PROMPT = `You are maude, a local coding assistant. Use tools to read, write, and run code. Be concise.
+export function buildSystemPrompt(): string {
+  const cwd = process.cwd()
+  const now = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })
+  return `You are maude, a personal coding and operations assistant for Courtney Crappell, Dean of the UMKC Conservatory of Music and Dance. Use tools to read, write, run code, and manage files. Be concise and direct.
 
-When the user asks to find or locate a file they created, use find_files. NEVER use dir "~" directly — it times out. Instead search these specific directories one at a time: ~/Desktop, ~/Documents, ~/Downloads, "~/Library/Mobile Documents" (iCloud), "~/Library/CloudStorage/OneDrive-UniversityofMissouri" (work OneDrive).
-Use find_files to locate files by name or extension. Use grep_files only to search inside file contents.
-Call one tool at a time. Do not output lists of tool calls — call one, wait for the result, then call the next.`
+User: Courtney Crappell (cjchgy), Dean of UMKC Conservatory of Music and Dance
+Current working directory: ${cwd}
+Today's date: ${now}
+
+File search rules:
+- Use find_files to locate files by name or extension. Use grep_files only to search inside file contents.
+- NEVER search dir "~" directly — it times out. Search specific dirs one at a time: ~/Desktop, ~/Documents, ~/Downloads, "~/Library/Mobile Documents" (iCloud Drive), "~/Library/CloudStorage/OneDrive-UniversityofMissouri" (work OneDrive). For work files, try OneDrive first.
+- Use list_dir to explore what's in a folder before diving deeper.
+
+General rules:
+- Call one tool at a time. Wait for the result, then decide next step.
+- Do not output JSON tool calls as text — call them properly.
+- Only write or save files when explicitly asked. Never auto-save summaries or results unless instructed.
+- When asked to draft an email: show the draft as text in your reply. Only save to a file if asked. Never attempt to send via shell (mail, sendmail, etc.).`
+}
 
 type EmbeddedCall = { name: string; args: Record<string, string> }
 
@@ -17,9 +32,16 @@ type EmbeddedCall = { name: string; args: Record<string, string> }
 // field instead of using the proper tool_calls API format. Detect and handle both
 // single-call and array-of-calls formats, with optional leading explanation text.
 function tryParseEmbeddedToolCalls(content: string): EmbeddedCall[] {
-  // Strip ALL code fence markers so embedded ```json blocks become plain JSON
-  const stripped = content.replace(/```(?:json)?\n?/g, "").replace(/```/g, "").trim()
-  const candidates = [stripped]
+  const candidates: string[] = []
+
+  // Extract each fenced block individually (model may output multiple ```json blocks)
+  const fenceBlocks = [...content.matchAll(/```(?:json|tool_call)?\n?([\s\S]*?)```/g)].map(m => m[1].trim())
+  candidates.push(...fenceBlocks)
+
+  // Also try the whole content with fences stripped
+  const stripped = content.replace(/```(?:json|tool_call)?\n?/g, "").replace(/```/g, "").trim()
+  candidates.push(stripped)
+
   // Also try from the first [ or { in case model prepended prose
   const firstBracket = stripped.search(/[[{]/)
   if (firstBracket > 0) candidates.push(stripped.slice(firstBracket))
@@ -35,31 +57,65 @@ function tryParseEmbeddedToolCalls(content: string): EmbeddedCall[] {
   const isToolCall = (item: any) => normaliseName(item) && item?.arguments && typeof item.arguments === "object"
   const toCall = (item: any): EmbeddedCall => ({ name: normaliseName(item)!, args: item.arguments as Record<string, string> })
 
+  // Some models emit literal newlines/tabs inside JSON string values (invalid JSON).
+  // Fix by escaping control chars inside string literals only.
+  function repairJson(s: string): string {
+    let out = ""; let inStr = false; let esc = false
+    for (const ch of s) {
+      if (esc) { out += ch; esc = false; continue }
+      if (ch === "\\") { out += ch; esc = true; continue }
+      if (ch === '"') { inStr = !inStr; out += ch; continue }
+      if (inStr && ch === "\n") { out += "\\n"; continue }
+      if (inStr && ch === "\r") { out += "\\r"; continue }
+      if (inStr && ch === "\t") { out += "\\t"; continue }
+      out += ch
+    }
+    return out
+  }
+
+  const seen = new Set<string>()
   const results: EmbeddedCall[] = []
+
+  const addCall = (call: EmbeddedCall) => {
+    const key = `${call.name}:${JSON.stringify(call.args)}`
+    if (!seen.has(key)) { seen.add(key); results.push(call) }
+  }
+
   for (const candidate of candidates) {
-    try {
-      const parsed = JSON.parse(candidate)
-      if (Array.isArray(parsed)) {
-        const calls = parsed.filter(isToolCall)
-        if (calls.length > 0) return calls.map(toCall)
+    for (const attempt of [candidate, repairJson(candidate)]) {
+      try {
+        const parsed = JSON.parse(attempt)
+        if (Array.isArray(parsed)) {
+          const calls = parsed.filter(isToolCall)
+          if (calls.length > 0) { calls.forEach(c => addCall(toCall(c))); break }
+        }
+        if (isToolCall(parsed)) { addCall(toCall(parsed)); break }
+      } catch {
+        // not valid JSON
       }
-      if (isToolCall(parsed)) {
-        results.push(toCall(parsed))
-      }
-    } catch {
-      // not valid JSON
     }
   }
-  // Return NDJSON results if we collected any from individual lines
-  if (results.length > 0) return results
-  return []
+  return results
 }
 
-export async function runAgent(userMessage: string, config: MaudeConfig, client: OpenAI): Promise<string> {
-  const messages: ChatCompletionMessageParam[] = [
-    { role: "system", content: SYSTEM_PROMPT },
-    { role: "user", content: userMessage },
-  ]
+export type ConversationHistory = ChatCompletionMessageParam[]
+
+// Keep system message + last 40 messages to prevent context overflow in long REPL sessions
+function trimHistory(history: ConversationHistory): ConversationHistory {
+  const MAX_MESSAGES = 40
+  const [system, ...rest] = history
+  if (rest.length <= MAX_MESSAGES) return history
+  return [system, ...rest.slice(rest.length - MAX_MESSAGES)]
+}
+
+export async function runAgent(
+  userMessage: string,
+  config: MaudeConfig,
+  client: OpenAI,
+  history?: ConversationHistory
+): Promise<{ text: string; history: ConversationHistory }> {
+  const base = history ? trimHistory(history) : [{ role: "system" as const, content: buildSystemPrompt() }]
+  const messages: ChatCompletionMessageParam[] = [...base, { role: "user", content: userMessage }]
 
   for (let round = 0; round < config.maxRounds; round++) {
     const response = await chatCompletion(client, config.model, messages, getToolSchemas(), config.debug)
@@ -100,10 +156,10 @@ export async function runAgent(userMessage: string, config: MaudeConfig, client:
         // Models that use this format don't understand role:"tool" — send results as user message
         messages.push({ role: "user", content: results.join("\n\n") })
       } else {
-        return content
+        return { text: content, history: messages }
       }
     }
   }
 
-  return `[max rounds reached — increase maxRounds in ~/.maude/config.json]`
+  return { text: `[max rounds reached — increase maxRounds in ~/.maude/config.json]`, history: messages }
 }

@@ -1,14 +1,17 @@
 import readline from "readline"
 import chalk from "chalk"
 import type OpenAI from "openai"
-import { runAgent } from "./agent.js"
+import { runAgent, type ConversationHistory } from "./agent.js"
+import { buildSystemPrompt } from "./agent.js"
 import type { MaudeConfig } from "./config.js"
 
 const HELP = `
 Commands:
-  .help   Show this message
-  .exit   Exit maude
-  .quit   Exit maude
+  .help     Show this message
+  .clear    Reset conversation history
+  .history  Show number of messages in current session
+  .exit     Exit maude
+  .quit     Exit maude
 
 Just type your request and press Enter.
 `
@@ -21,6 +24,8 @@ export async function startRepl(config: MaudeConfig, client: OpenAI): Promise<vo
   })
 
   console.log(chalk.dim(`maude v0.1.0 · model: ${config.model} · .help for commands`))
+
+  let history: ConversationHistory = [{ role: "system", content: buildSystemPrompt() }]
 
   rl.prompt()
 
@@ -43,11 +48,26 @@ export async function startRepl(config: MaudeConfig, client: OpenAI): Promise<vo
       return
     }
 
+    if (input === ".clear") {
+      history = [{ role: "system", content: buildSystemPrompt() }]
+      console.log(chalk.dim("Conversation history cleared."))
+      rl.prompt()
+      return
+    }
+
+    if (input === ".history") {
+      const turns = history.length - 1 // exclude system message
+      console.log(chalk.dim(`Session: ${turns} message${turns !== 1 ? "s" : ""} in history.`))
+      rl.prompt()
+      return
+    }
+
     process.stdout.write(chalk.dim("thinking…\n"))
 
     try {
-      const result = await runAgent(input, config, client)
-      console.log(chalk.white(result))
+      const { text, history: updated } = await runAgent(input, config, client, history)
+      history = updated
+      console.log(chalk.white(text))
     } catch (e: any) {
       console.error(chalk.red(`Error: ${e.message}`))
     }
