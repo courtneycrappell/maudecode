@@ -17,12 +17,12 @@ type EmbeddedCall = { name: string; args: Record<string, string> }
 // field instead of using the proper tool_calls API format. Detect and handle both
 // single-call and array-of-calls formats, with optional leading explanation text.
 function tryParseEmbeddedToolCalls(content: string): EmbeddedCall[] {
-  const candidates = [
-    content.trim().replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, ""),
-  ]
-  // Extract from first [ or { in case model prepended explanatory text
-  const firstBracket = content.search(/[[{]/)
-  if (firstBracket > 0) candidates.push(content.slice(firstBracket))
+  // Strip ALL code fence markers so embedded ```json blocks become plain JSON
+  const stripped = content.replace(/```(?:json)?\n?/g, "").replace(/```/g, "").trim()
+  const candidates = [stripped]
+  // Also try from the first [ or { in case model prepended prose
+  const firstBracket = stripped.search(/[[{]/)
+  if (firstBracket > 0) candidates.push(stripped.slice(firstBracket))
 
   for (const candidate of candidates) {
     try {
