@@ -7,7 +7,7 @@ import type { MaudeConfig } from "./config.js"
 
 const SYSTEM_PROMPT = `You are maude, a local coding assistant. Use tools to read, write, and run code. Be concise.
 
-When the user asks to find or locate a file they created, use find_files. Search specific directories one at a time: ~/Desktop, ~/Documents, ~/Downloads, ~/iCloud Drive. Do NOT search ~ directly — it times out.
+When the user asks to find or locate a file they created, use find_files. NEVER use dir "~" directly — it times out. Instead search these specific directories one at a time: ~/Desktop, ~/Documents, ~/Downloads, "~/Library/Mobile Documents" (iCloud), "~/Library/CloudStorage/OneDrive-UniversityofMissouri" (work OneDrive).
 Use find_files to locate files by name or extension. Use grep_files only to search inside file contents.
 Call one tool at a time. Do not output lists of tool calls — call one, wait for the result, then call the next.`
 
@@ -27,16 +27,21 @@ function tryParseEmbeddedToolCalls(content: string): EmbeddedCall[] {
   for (const candidate of candidates) {
     try {
       const parsed = JSON.parse(candidate)
+      // Normalise: accept both "name" and "function_name" as the tool name field
+      const normaliseName = (item: any): string | undefined =>
+        typeof item?.name === "string" ? item.name : typeof item?.function_name === "string" ? item.function_name : undefined
+
       // Array of tool calls
       if (Array.isArray(parsed)) {
         const calls = parsed.filter(
-          (item) => typeof item?.name === "string" && item?.arguments && typeof item.arguments === "object"
+          (item) => normaliseName(item) && item?.arguments && typeof item.arguments === "object"
         )
-        if (calls.length > 0) return calls.map((c) => ({ name: c.name, args: c.arguments as Record<string, string> }))
+        if (calls.length > 0) return calls.map((c) => ({ name: normaliseName(c)!, args: c.arguments as Record<string, string> }))
       }
       // Single tool call
-      if (typeof parsed.name === "string" && parsed.arguments && typeof parsed.arguments === "object") {
-        return [{ name: parsed.name, args: parsed.arguments as Record<string, string> }]
+      const toolName = normaliseName(parsed)
+      if (toolName && parsed.arguments && typeof parsed.arguments === "object") {
+        return [{ name: toolName, args: parsed.arguments as Record<string, string> }]
       }
     } catch {
       // not valid JSON
