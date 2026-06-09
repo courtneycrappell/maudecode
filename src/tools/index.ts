@@ -249,6 +249,13 @@ export function getToolSchemas(): ChatCompletionTool[] {
   return TOOLS.map((t) => t.schema)
 }
 
+export function getToolSummaries(): string[] {
+  return TOOLS.map((t) => {
+    const fn = t.schema.function
+    return `  ${fn.name.padEnd(14)} ${fn.description}`
+  })
+}
+
 export async function dispatchTool(name: string, args: Record<string, string>): Promise<string> {
   const tool = TOOLS.find((t) => t.schema.function.name === name)
   if (!tool) return `Unknown tool: ${name}`

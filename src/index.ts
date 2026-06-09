@@ -26,8 +26,12 @@ program
     }
 
     if (prompt) {
-      const { text } = await runAgent(prompt, config, client)
-      console.log(text)
+      let streamed = false
+      const { text } = await runAgent(prompt, config, client, undefined,
+        (token) => { process.stdout.write(token); streamed = true }
+      )
+      if (streamed) process.stdout.write("\n")
+      else console.log(text)
     } else {
       await startRepl(config, client)
     }

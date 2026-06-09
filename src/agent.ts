@@ -1,7 +1,7 @@
 import chalk from "chalk"
 import type OpenAI from "openai"
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions.js"
-import { chatCompletion } from "./llm.js"
+import { chatCompletionStream } from "./llm.js"
 import { getToolSchemas, dispatchTool } from "./tools/index.js"
 import type { MaudeConfig } from "./config.js"
 
@@ -22,43 +22,35 @@ File search rules:
 General rules:
 - Call one tool at a time. Wait for the result, then decide next step.
 - Do not output JSON tool calls as text — call them properly.
-- Only write or save files when explicitly asked. Never auto-save summaries or results unless instructed.
-- When asked to draft an email: show the draft as text in your reply. Only save to a file if asked. Never attempt to send via shell (mail, sendmail, etc.).`
+- Only use tools when they are genuinely needed. For writing, brainstorming, answering questions, drafting text, or explaining things — respond directly without calling any tool.
+- Only write or save files when explicitly asked ("save this", "write to a file", "create a file"). Never auto-save.
+- When asked to draft an email or write text: output it directly in your reply. Do not save or send it unless asked.
+- Never use run_bash just to output text — use your own words instead.`
 }
 
 type EmbeddedCall = { name: string; args: Record<string, string> }
 
-// Some models (e.g. qwen2.5-coder) output tool calls as JSON text in the content
-// field instead of using the proper tool_calls API format. Detect and handle both
-// single-call and array-of-calls formats, with optional leading explanation text.
 function tryParseEmbeddedToolCalls(content: string): EmbeddedCall[] {
   const candidates: string[] = []
 
-  // Extract each fenced block individually (model may output multiple ```json blocks)
   const fenceBlocks = [...content.matchAll(/```(?:json|tool_call)?\n?([\s\S]*?)```/g)].map(m => m[1].trim())
   candidates.push(...fenceBlocks)
 
-  // Also try the whole content with fences stripped
   const stripped = content.replace(/```(?:json|tool_call)?\n?/g, "").replace(/```/g, "").trim()
   candidates.push(stripped)
 
-  // Also try from the first [ or { in case model prepended prose
   const firstBracket = stripped.search(/[[{]/)
   if (firstBracket > 0) candidates.push(stripped.slice(firstBracket))
 
-  // Also try each line individually (NDJSON: model outputs one JSON object per line)
   const lines = stripped.split("\n").map(l => l.trim()).filter(l => l.startsWith("{") || l.startsWith("["))
   if (lines.length > 1) candidates.push(...lines)
 
-  // Normalise: accept both "name" and "function_name" as the tool name field
   const normaliseName = (item: any): string | undefined =>
     typeof item?.name === "string" ? item.name : typeof item?.function_name === "string" ? item.function_name : undefined
 
   const isToolCall = (item: any) => normaliseName(item) && item?.arguments && typeof item.arguments === "object"
   const toCall = (item: any): EmbeddedCall => ({ name: normaliseName(item)!, args: item.arguments as Record<string, string> })
 
-  // Some models emit literal newlines/tabs inside JSON string values (invalid JSON).
-  // Fix by escaping control chars inside string literals only.
   function repairJson(s: string): string {
     let out = ""; let inStr = false; let esc = false
     for (const ch of s) {
@@ -100,7 +92,6 @@ function tryParseEmbeddedToolCalls(content: string): EmbeddedCall[] {
 
 export type ConversationHistory = ChatCompletionMessageParam[]
 
-// Keep system message + last 40 messages to prevent context overflow in long REPL sessions
 function trimHistory(history: ConversationHistory): ConversationHistory {
   const MAX_MESSAGES = 40
   const [system, ...rest] = history
@@ -112,39 +103,64 @@ export async function runAgent(
   userMessage: string,
   config: MaudeConfig,
   client: OpenAI,
-  history?: ConversationHistory
+  history?: ConversationHistory,
+  onToken?: (token: string) => void
 ): Promise<{ text: string; history: ConversationHistory }> {
   const base = history ? trimHistory(history) : [{ role: "system" as const, content: buildSystemPrompt() }]
   const messages: ChatCompletionMessageParam[] = [...base, { role: "user", content: userMessage }]
 
   for (let round = 0; round < config.maxRounds; round++) {
-    const response = await chatCompletion(client, config.model, messages, getToolSchemas(), config.debug)
-    const choice = response.choices[0]
+    // Buffer if response starts with JSON (embedded tool call format).
+    // Only stream live for prose responses so raw JSON never leaks to the terminal.
+    let firstToken = true
+    let looksLikeJson = false
+    const tokenRouter = (token: string) => {
+      if (firstToken) {
+        firstToken = false
+        looksLikeJson = token.trimStart().startsWith("{") || token.trimStart().startsWith("[")
+      }
+      if (!looksLikeJson) onToken?.(token)
+    }
 
-    messages.push(choice.message as ChatCompletionMessageParam)
+    const streamed = await chatCompletionStream(
+      client, config.model, messages, getToolSchemas(), config.debug,
+      tokenRouter
+    )
 
-    if (choice.finish_reason === "tool_calls" && choice.message.tool_calls) {
-      for (const toolCall of choice.message.tool_calls) {
-        const name = toolCall.function.name
-        const args = JSON.parse(toolCall.function.arguments) as Record<string, string>
+    const { content, finish_reason, tool_calls } = streamed
 
-        process.stdout.write(chalk.cyan(`⚙ ${name} `) + chalk.dim(JSON.stringify(args)) + "\n")
+    if (finish_reason === "tool_calls" && tool_calls && tool_calls.length > 0) {
+      // Proper tool_calls format
+      messages.push({
+        role: "assistant",
+        content: null,
+        tool_calls: tool_calls.map(tc => ({
+          id: tc.id,
+          type: "function" as const,
+          function: { name: tc.name, arguments: tc.arguments },
+        })),
+      })
 
-        const result = await dispatchTool(name, args)
+      for (const tc of tool_calls) {
+        let args: Record<string, string>
+        try { args = JSON.parse(tc.arguments) }
+        catch { args = {} }
 
+        process.stdout.write(chalk.cyan(`⚙ ${tc.name} `) + chalk.dim(JSON.stringify(args)) + "\n")
+        const result = await dispatchTool(tc.name, args)
         const preview = result.length > 120 ? result.slice(0, 120) + "…" : result
         process.stdout.write(chalk.dim(`  → ${preview}\n`))
 
-        messages.push({
-          role: "tool",
-          tool_call_id: toolCall.id,
-          content: result,
-        })
+        messages.push({ role: "tool", tool_call_id: tc.id, content: result })
       }
     } else {
-      const content = choice.message.content ?? ""
+      // Possibly embedded tool calls in content
+      messages.push({ role: "assistant", content })
+
       const embedded = tryParseEmbeddedToolCalls(content)
       if (embedded.length > 0) {
+        // Content was already streamed — if it looks like JSON, that's unfortunate but harmless.
+        // Execute the tools and loop.
         const results: string[] = []
         for (const call of embedded) {
           process.stdout.write(chalk.cyan(`⚙ ${call.name} `) + chalk.dim(JSON.stringify(call.args)) + "\n")
@@ -153,7 +169,6 @@ export async function runAgent(
           process.stdout.write(chalk.dim(`  → ${preview}\n`))
           results.push(`Tool \`${call.name}\` result:\n${result}`)
         }
-        // Models that use this format don't understand role:"tool" — send results as user message
         messages.push({ role: "user", content: results.join("\n\n") })
       } else {
         return { text: content, history: messages }
