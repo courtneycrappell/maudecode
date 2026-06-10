@@ -28,7 +28,9 @@ describe("runAgent", () => {
       return { content: "Hello!", finish_reason: "stop" }
     })
 
-    const { text } = await runAgent("hi", mockConfig, mockClient)
+    const { text } = await runAgent("hi", mockConfig, mockClient, undefined, {
+      onToken: (t) => process.stdout.write(t),
+    })
     expect(text).toBe("Hello!")
   })
 

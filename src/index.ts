@@ -29,9 +29,9 @@ program
 
     if (prompt) {
       let streamed = false
-      const { text } = await runAgent(prompt, config, client, undefined,
-        (token) => { process.stdout.write(token); streamed = true }
-      )
+      const { text } = await runAgent(prompt, config, client, undefined, {
+        onToken: (token) => { process.stdout.write(token); streamed = true },
+      })
       if (streamed) process.stdout.write("\n")
       else console.log(text)
     } else {

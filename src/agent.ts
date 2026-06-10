@@ -5,9 +5,16 @@ import type OpenAI from "openai"
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions.js"
 import { chatCompletionStream } from "./llm.js"
 import { getToolSchemas, dispatchTool } from "./tools/index.js"
+import { expandHome } from "./utils.js"
 import type { MaudeConfig } from "./config.js"
 
 export type ConfirmFn = (prompt: string) => Promise<boolean>
+
+export interface RunAgentOptions {
+  onToken?: (token: string) => void
+  confirm?: ConfirmFn
+  onFileChange?: (path: string) => void
+}
 
 const DANGEROUS_PATTERNS = [
   /\brm\s+-[rRfF]*[rR][fF]*/,
@@ -58,10 +65,74 @@ Tool use rules:
 - Call one tool at a time. Wait for the result before deciding what to do next.
 - Do not output JSON tool calls as text — call them properly via the API.
 - read_files can read multiple files at once — use it when you need several files.
-- git_add then git_commit to stage and commit changes. git_push to push.${claudeMd}`
+- git_add then git_commit to stage and commit changes. git_push to push.
+- read_clipboard to read what the user copied; write_clipboard to copy output for them.${claudeMd}`
 }
 
-type EmbeddedCall = { name: string; args: Record<string, string> }
+function showEditPreview(toolPath: string, oldStr: string, newStr: string): void {
+  const truncLine = (s: string) => s.length > 100 ? s.slice(0, 100) + "…" : s
+  const oldLines = oldStr.split("\n")
+  const newLines = newStr.split("\n")
+  const MAX_LINES = 8
+
+  process.stdout.write(chalk.dim(`  Edit: ${toolPath}\n  `) + chalk.dim("─".repeat(56)) + "\n")
+  for (const line of oldLines.slice(0, MAX_LINES)) {
+    process.stdout.write(chalk.red(`  - ${truncLine(line)}\n`))
+  }
+  if (oldLines.length > MAX_LINES) process.stdout.write(chalk.dim(`  - [${oldLines.length - MAX_LINES} more lines]\n`))
+  for (const line of newLines.slice(0, MAX_LINES)) {
+    process.stdout.write(chalk.green(`  + ${truncLine(line)}\n`))
+  }
+  if (newLines.length > MAX_LINES) process.stdout.write(chalk.dim(`  + [${newLines.length - MAX_LINES} more lines]\n`))
+  process.stdout.write(chalk.dim("  ") + chalk.dim("─".repeat(56)) + "\n")
+}
+
+async function executeToolCall(
+  name: string,
+  args: Record<string, any>,
+  confirm?: ConfirmFn,
+  onFileChange?: (path: string) => void
+): Promise<string> {
+  // Dangerous bash check
+  if (name === "run_bash" && args.command && isDangerous(args.command) && confirm) {
+    process.stdout.write(chalk.yellow(`⚠ Dangerous command: ${args.command}\n`))
+    const ok = await confirm(chalk.yellow("  Run it? [y/N] "))
+    if (!ok) return "User denied: command was blocked."
+  }
+
+  // Diff preview for edit_file
+  if (name === "edit_file" && args.path && args.old_str !== undefined && args.new_str !== undefined && confirm) {
+    showEditPreview(args.path, args.old_str, args.new_str)
+    const ok = await confirm(chalk.yellow("  Apply this edit? [Y/n] "))
+    if (!ok) return "User cancelled edit. Do not retry — ask the user what they would like to change instead."
+  }
+
+  // Write-file overwrite warning
+  if (name === "write_file" && args.path && confirm) {
+    const fullPath = expandHome(args.path)
+    let exists = false
+    try { await fs.access(fullPath); exists = true } catch { /* new file */ }
+    if (exists) {
+      process.stdout.write(chalk.yellow(`⚠ Will overwrite: ${args.path}\n`))
+      const ok = await confirm(chalk.yellow("  Overwrite this file? [Y/n] "))
+      if (!ok) return "User cancelled. File was not overwritten."
+    }
+  }
+
+  process.stdout.write(chalk.cyan(`⚙ ${name} `) + chalk.dim(JSON.stringify(args)) + "\n")
+  const result = await dispatchTool(name, args)
+  const preview = result.length > 120 ? result.slice(0, 120) + "…" : result
+  process.stdout.write(chalk.dim(`  → ${preview}\n`))
+
+  // Track file modifications
+  if ((name === "write_file" || name === "edit_file") && args.path && !result.startsWith("Error")) {
+    onFileChange?.(expandHome(args.path))
+  }
+
+  return result
+}
+
+type EmbeddedCall = { name: string; args: Record<string, any> }
 
 function tryParseEmbeddedToolCalls(content: string): EmbeddedCall[] {
   const candidates: string[] = []
@@ -82,7 +153,7 @@ function tryParseEmbeddedToolCalls(content: string): EmbeddedCall[] {
     typeof item?.name === "string" ? item.name : typeof item?.function_name === "string" ? item.function_name : undefined
 
   const isToolCall = (item: any) => normaliseName(item) && item?.arguments && typeof item.arguments === "object"
-  const toCall = (item: any): EmbeddedCall => ({ name: normaliseName(item)!, args: item.arguments as Record<string, string> })
+  const toCall = (item: any): EmbeddedCall => ({ name: normaliseName(item)!, args: item.arguments as Record<string, any> })
 
   function repairJson(s: string): string {
     let out = ""; let inStr = false; let esc = false
@@ -137,15 +208,13 @@ export async function runAgent(
   config: MaudeConfig,
   client: OpenAI,
   history?: ConversationHistory,
-  onToken?: (token: string) => void,
-  confirm?: ConfirmFn
+  options: RunAgentOptions = {}
 ): Promise<{ text: string; history: ConversationHistory }> {
+  const { onToken, confirm, onFileChange } = options
   const base = history ? trimHistory(history) : [{ role: "system" as const, content: await buildSystemPrompt() }]
   const messages: ChatCompletionMessageParam[] = [...base, { role: "user", content: userMessage }]
 
   for (let round = 0; round < config.maxRounds; round++) {
-    // Buffer if response starts with JSON (embedded tool call format).
-    // Only stream live for prose responses so raw JSON never leaks to the terminal.
     let firstToken = true
     let looksLikeJson = false
     const tokenRouter = (token: string) => {
@@ -164,7 +233,6 @@ export async function runAgent(
     const { content, finish_reason, tool_calls } = streamed
 
     if (finish_reason === "tool_calls" && tool_calls && tool_calls.length > 0) {
-      // Proper tool_calls format
       messages.push({
         role: "assistant",
         content: null,
@@ -176,47 +244,21 @@ export async function runAgent(
       })
 
       for (const tc of tool_calls) {
-        let args: Record<string, string>
+        let args: Record<string, any>
         try { args = JSON.parse(tc.arguments) }
         catch { args = {} }
 
-        if (tc.name === "run_bash" && args.command && isDangerous(args.command) && confirm) {
-          process.stdout.write(chalk.yellow(`⚠ Dangerous command: ${args.command}\n`))
-          const ok = await confirm(chalk.yellow("  Run it? [y/N] "))
-          if (!ok) {
-            messages.push({ role: "tool", tool_call_id: tc.id, content: "User denied: command was blocked." })
-            continue
-          }
-        }
-
-        process.stdout.write(chalk.cyan(`⚙ ${tc.name} `) + chalk.dim(JSON.stringify(args)) + "\n")
-        const result = await dispatchTool(tc.name, args)
-        const preview = result.length > 120 ? result.slice(0, 120) + "…" : result
-        process.stdout.write(chalk.dim(`  → ${preview}\n`))
-
+        const result = await executeToolCall(tc.name, args, confirm, onFileChange)
         messages.push({ role: "tool", tool_call_id: tc.id, content: result })
       }
     } else {
-      // Possibly embedded tool calls in content
       messages.push({ role: "assistant", content })
 
       const embedded = tryParseEmbeddedToolCalls(content)
       if (embedded.length > 0) {
         const results: string[] = []
         for (const call of embedded) {
-          if (call.name === "run_bash" && call.args.command && isDangerous(call.args.command) && confirm) {
-            process.stdout.write(chalk.yellow(`⚠ Dangerous command: ${call.args.command}\n`))
-            const ok = await confirm(chalk.yellow("  Run it? [y/N] "))
-            if (!ok) {
-              results.push(`Tool \`${call.name}\` result:\nUser denied: command was blocked.`)
-              continue
-            }
-          }
-
-          process.stdout.write(chalk.cyan(`⚙ ${call.name} `) + chalk.dim(JSON.stringify(call.args)) + "\n")
-          const result = await dispatchTool(call.name, call.args)
-          const preview = result.length > 120 ? result.slice(0, 120) + "…" : result
-          process.stdout.write(chalk.dim(`  → ${preview}\n`))
+          const result = await executeToolCall(call.name, call.args, confirm, onFileChange)
           results.push(`Tool \`${call.name}\` result:\n${result}`)
         }
         messages.push({ role: "user", content: results.join("\n\n") })

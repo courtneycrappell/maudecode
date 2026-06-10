@@ -1,6 +1,7 @@
 import fs from "fs/promises"
 import path from "path"
 import { expandHome } from "../utils.js"
+import { pushUndo } from "../undo.js"
 
 const MAX_BYTES = 50 * 1024
 
@@ -37,6 +38,9 @@ export async function readFiles(filePaths: string[]): Promise<string> {
 export async function writeFile(filePath: string, content: string): Promise<string> {
   filePath = expandHome(filePath)
   try {
+    let prior: string | null = null
+    try { prior = await fs.readFile(filePath, "utf8") } catch { /* new file */ }
+    pushUndo(filePath, prior)
     await fs.mkdir(path.dirname(filePath), { recursive: true })
     await fs.writeFile(filePath, content, "utf8")
     return `Written: ${filePath}`
@@ -52,6 +56,7 @@ export async function editFile(filePath: string, oldStr: string, newStr: string)
     if (!content.includes(oldStr)) {
       return `Error: oldStr not found in ${filePath}. No changes made.`
     }
+    pushUndo(filePath, content)
     const updated = content.replace(oldStr, newStr)
     await fs.writeFile(filePath, updated, "utf8")
     return `Edited: ${filePath}`

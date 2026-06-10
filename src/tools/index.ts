@@ -2,7 +2,7 @@ import type { ChatCompletionTool } from "openai/resources/chat/completions.js"
 import { readFile, readFiles, writeFile, editFile } from "./file.js"
 import { runBash } from "./bash.js"
 import { findFiles, grepFiles } from "./search.js"
-import { listDir, openFile } from "./system.js"
+import { listDir, openFile, readClipboard, writeClipboard } from "./system.js"
 import { readCsv } from "./csv.js"
 import { fetchUrl } from "./web.js"
 import { gitStatus, gitDiff, gitLog, gitAdd, gitCommit, gitPush } from "./git.js"
@@ -154,6 +154,32 @@ const TOOLS: ToolEntry[] = [
       },
     },
     handler: ({ path }) => openFile(path),
+  },
+  {
+    schema: {
+      type: "function",
+      function: {
+        name: "read_clipboard",
+        description: "Read the current macOS clipboard contents as text. Use when the user says 'use what I copied' or 'from my clipboard'.",
+        parameters: { type: "object", properties: {}, required: [] },
+      },
+    },
+    handler: () => readClipboard(),
+  },
+  {
+    schema: {
+      type: "function",
+      function: {
+        name: "write_clipboard",
+        description: "Copy text to the macOS clipboard so the user can paste it. Use when the user says 'copy this to my clipboard' or 'put this in my clipboard'.",
+        parameters: {
+          type: "object",
+          properties: { content: { type: "string", description: "Text to copy to clipboard" } },
+          required: ["content"],
+        },
+      },
+    },
+    handler: ({ content }) => writeClipboard(content),
   },
   {
     schema: {
