@@ -1,13 +1,43 @@
 import chalk from "chalk"
+import fs from "fs/promises"
+import path from "path"
 import type OpenAI from "openai"
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions.js"
 import { chatCompletionStream } from "./llm.js"
 import { getToolSchemas, dispatchTool } from "./tools/index.js"
 import type { MaudeConfig } from "./config.js"
 
-export function buildSystemPrompt(): string {
+export type ConfirmFn = (prompt: string) => Promise<boolean>
+
+const DANGEROUS_PATTERNS = [
+  /\brm\s+-[rRfF]*[rR][fF]*/,
+  /\brm\s+-[rRfF]*[rR]/,
+  /\bsudo\s+rm\b/,
+  /\bdd\s+if=/,
+  /\bmkfs\b/,
+  />\s*\/dev\//,
+  /\bDROP\s+(TABLE|DATABASE)\b/i,
+  /\bTRUNCATE\s+TABLE\b/i,
+]
+
+function isDangerous(command: string): boolean {
+  return DANGEROUS_PATTERNS.some(p => p.test(command))
+}
+
+async function readClaudeMd(cwd: string): Promise<string> {
+  for (const name of ["CLAUDE.md", "claude.md", ".claude.md"]) {
+    try {
+      const content = await fs.readFile(path.join(cwd, name), "utf8")
+      return `\n\n## Project Instructions (${name})\n${content}`
+    } catch { /* not found */ }
+  }
+  return ""
+}
+
+export async function buildSystemPrompt(): Promise<string> {
   const cwd = process.cwd()
   const now = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })
+  const claudeMd = await readClaudeMd(cwd)
   return `You are maude, a personal coding and operations assistant for Courtney Crappell, Dean of the UMKC Conservatory of Music and Dance. Be concise and direct.
 
 CRITICAL RULES — follow these exactly:
@@ -26,7 +56,9 @@ File search rules:
 
 Tool use rules:
 - Call one tool at a time. Wait for the result before deciding what to do next.
-- Do not output JSON tool calls as text — call them properly via the API.`
+- Do not output JSON tool calls as text — call them properly via the API.
+- read_files can read multiple files at once — use it when you need several files.
+- git_add then git_commit to stage and commit changes. git_push to push.${claudeMd}`
 }
 
 type EmbeddedCall = { name: string; args: Record<string, string> }
@@ -105,9 +137,10 @@ export async function runAgent(
   config: MaudeConfig,
   client: OpenAI,
   history?: ConversationHistory,
-  onToken?: (token: string) => void
+  onToken?: (token: string) => void,
+  confirm?: ConfirmFn
 ): Promise<{ text: string; history: ConversationHistory }> {
-  const base = history ? trimHistory(history) : [{ role: "system" as const, content: buildSystemPrompt() }]
+  const base = history ? trimHistory(history) : [{ role: "system" as const, content: await buildSystemPrompt() }]
   const messages: ChatCompletionMessageParam[] = [...base, { role: "user", content: userMessage }]
 
   for (let round = 0; round < config.maxRounds; round++) {
@@ -147,6 +180,15 @@ export async function runAgent(
         try { args = JSON.parse(tc.arguments) }
         catch { args = {} }
 
+        if (tc.name === "run_bash" && args.command && isDangerous(args.command) && confirm) {
+          process.stdout.write(chalk.yellow(`⚠ Dangerous command: ${args.command}\n`))
+          const ok = await confirm(chalk.yellow("  Run it? [y/N] "))
+          if (!ok) {
+            messages.push({ role: "tool", tool_call_id: tc.id, content: "User denied: command was blocked." })
+            continue
+          }
+        }
+
         process.stdout.write(chalk.cyan(`⚙ ${tc.name} `) + chalk.dim(JSON.stringify(args)) + "\n")
         const result = await dispatchTool(tc.name, args)
         const preview = result.length > 120 ? result.slice(0, 120) + "…" : result
@@ -160,10 +202,17 @@ export async function runAgent(
 
       const embedded = tryParseEmbeddedToolCalls(content)
       if (embedded.length > 0) {
-        // Content was already streamed — if it looks like JSON, that's unfortunate but harmless.
-        // Execute the tools and loop.
         const results: string[] = []
         for (const call of embedded) {
+          if (call.name === "run_bash" && call.args.command && isDangerous(call.args.command) && confirm) {
+            process.stdout.write(chalk.yellow(`⚠ Dangerous command: ${call.args.command}\n`))
+            const ok = await confirm(chalk.yellow("  Run it? [y/N] "))
+            if (!ok) {
+              results.push(`Tool \`${call.name}\` result:\nUser denied: command was blocked.`)
+              continue
+            }
+          }
+
           process.stdout.write(chalk.cyan(`⚙ ${call.name} `) + chalk.dim(JSON.stringify(call.args)) + "\n")
           const result = await dispatchTool(call.name, call.args)
           const preview = result.length > 120 ? result.slice(0, 120) + "…" : result

@@ -9,20 +9,29 @@ export async function readFile(filePath: string): Promise<string> {
   try {
     const buf = await fs.readFile(filePath)
 
-    // Detect binary: look for null bytes in the first 8 KB
     const sample = buf.slice(0, 8192)
     if (sample.includes(0)) {
       return `Error: ${filePath} appears to be a binary file and cannot be read as text.`
     }
 
-    const text = buf.toString("utf8")
-    if (buf.length > MAX_BYTES) {
-      return text.slice(0, MAX_BYTES) + "\n[truncated at 50 KB]"
-    }
-    return text
+    const truncated = buf.length > MAX_BYTES
+    const text = (truncated ? buf.slice(0, MAX_BYTES) : buf).toString("utf8")
+    const numbered = text
+      .split("\n")
+      .map((line, i) => `${String(i + 1).padStart(4, " ")}  ${line}`)
+      .join("\n")
+    return numbered + (truncated ? "\n[truncated at 50 KB]" : "")
   } catch (e: any) {
     return `Error reading ${filePath}: ${e.message}`
   }
+}
+
+export async function readFiles(filePaths: string[]): Promise<string> {
+  const parts: string[] = []
+  for (const p of filePaths) {
+    parts.push(`=== ${p} ===\n${await readFile(p)}`)
+  }
+  return parts.join("\n\n")
 }
 
 export async function writeFile(filePath: string, content: string): Promise<string> {

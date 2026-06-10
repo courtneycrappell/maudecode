@@ -15,11 +15,11 @@ afterEach(async () => {
 })
 
 describe("readFile", () => {
-  it("reads a file successfully", async () => {
+  it("reads a file successfully with line numbers", async () => {
     const p = path.join(tmpDir, "hello.txt")
     await fs.writeFile(p, "hello world", "utf8")
     const result = await readFile(p)
-    expect(result).toBe("hello world")
+    expect(result).toMatch(/^\s+1\s+hello world/)
   })
 
   it("returns error string for missing file", async () => {

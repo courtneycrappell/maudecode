@@ -1,11 +1,11 @@
 import type { ChatCompletionTool } from "openai/resources/chat/completions.js"
-import { readFile, writeFile, editFile } from "./file.js"
+import { readFile, readFiles, writeFile, editFile } from "./file.js"
 import { runBash } from "./bash.js"
 import { findFiles, grepFiles } from "./search.js"
 import { listDir, openFile } from "./system.js"
 import { readCsv } from "./csv.js"
 import { fetchUrl } from "./web.js"
-import { gitStatus, gitDiff, gitLog } from "./git.js"
+import { gitStatus, gitDiff, gitLog, gitAdd, gitCommit, gitPush } from "./git.js"
 
 interface ToolEntry {
   schema: ChatCompletionTool
@@ -242,6 +242,85 @@ const TOOLS: ToolEntry[] = [
       },
     },
     handler: ({ dir, n }) => gitLog(dir, n ? parseInt(n, 10) : undefined),
+  },
+  {
+    schema: {
+      type: "function",
+      function: {
+        name: "git_add",
+        description: "Stage files for a git commit. Use before git_commit. Pass specific file paths or '.' to stage all changes.",
+        parameters: {
+          type: "object",
+          properties: {
+            dir: { type: "string", description: "Repository directory (default: current directory)" },
+            paths: { type: "string", description: "Comma-separated list of paths to stage, or '.' for all (default: .)" },
+          },
+          required: [],
+        },
+      },
+    },
+    handler: ({ dir, paths }) => gitAdd(dir, paths),
+  },
+  {
+    schema: {
+      type: "function",
+      function: {
+        name: "git_commit",
+        description: "Create a git commit with staged changes. Always call git_add first to stage files.",
+        parameters: {
+          type: "object",
+          properties: {
+            dir: { type: "string", description: "Repository directory (default: current directory)" },
+            message: { type: "string", description: "Commit message (required)" },
+          },
+          required: ["message"],
+        },
+      },
+    },
+    handler: ({ dir, message }) => gitCommit(dir, message),
+  },
+  {
+    schema: {
+      type: "function",
+      function: {
+        name: "git_push",
+        description: "Push commits to a remote repository. Use after git_commit.",
+        parameters: {
+          type: "object",
+          properties: {
+            dir: { type: "string", description: "Repository directory (default: current directory)" },
+            remote: { type: "string", description: "Remote name (default: origin)" },
+            branch: { type: "string", description: "Branch to push (default: current branch)" },
+          },
+          required: [],
+        },
+      },
+    },
+    handler: ({ dir, remote, branch }) => gitPush(dir, remote, branch),
+  },
+  {
+    schema: {
+      type: "function",
+      function: {
+        name: "read_files",
+        description: "Read multiple files at once. More efficient than calling read_file repeatedly when you need several files.",
+        parameters: {
+          type: "object",
+          properties: {
+            paths: {
+              type: "array",
+              items: { type: "string" },
+              description: "List of file paths to read",
+            },
+          },
+          required: ["paths"],
+        },
+      },
+    },
+    handler: ({ paths }: any) => {
+      const list: string[] = Array.isArray(paths) ? paths : typeof paths === "string" ? paths.split(",").map((p: string) => p.trim()) : []
+      return readFiles(list)
+    },
   },
 ]
 
