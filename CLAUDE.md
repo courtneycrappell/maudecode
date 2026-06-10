@@ -101,3 +101,6 @@ maude --model qwen2.5-coder "review this file"
 - [ ] `src/repl.ts` — interactive REPL
 - [ ] `src/index.ts` — CLI entry point
 - [ ] End-to-end test: read a file, edit a file, run bash
+
+## Notes
+- The default timeout for runBash is 10 seconds
