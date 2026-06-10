@@ -4,9 +4,7 @@ import { expandHome } from "../utils.js"
 const DANGEROUS = /[;|&$`()]/
 
 function sanitize(str: string, label: string): void {
-  if (DANGEROUS.test(str)) {
-    throw new Error(`Unsafe characters in ${label}: "${str}"`)
-  }
+  if (DANGEROUS.test(str)) throw new Error(`Unsafe characters in ${label}: "${str}"`)
 }
 
 export async function findFiles(pattern: string, dir = "."): Promise<string> {
@@ -15,7 +13,12 @@ export async function findFiles(pattern: string, dir = "."): Promise<string> {
     sanitize(pattern, "pattern")
     sanitize(dir, "dir")
     const expanded = expandHome(dir)
-    return runBash(`find "${expanded}" -maxdepth 8 -name "${pattern}" -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null`, 30_000)
+    return runBash(
+      `find "${expanded}" -maxdepth 8 -type f -name "${pattern}" ` +
+      `-not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/__pycache__/*" ` +
+      `2>/dev/null | head -100`,
+      30_000
+    )
   } catch (e: any) {
     return `Error: ${e.message}`
   }
@@ -26,7 +29,15 @@ export async function grepFiles(pattern: string, dir = ".", flags = "-r"): Promi
     sanitize(pattern, "pattern")
     sanitize(dir, "dir")
     const expanded = expandHome(dir)
-    return runBash(`grep ${flags} --exclude-dir=node_modules --exclude-dir=.git "${pattern}" "${expanded}" 2>/dev/null`)
+    // -n for line numbers, -H for filenames, limit output to 200 lines
+    return runBash(
+      `grep -rn -H ${flags !== "-r" ? flags : ""} ` +
+      `--include="*.ts" --include="*.js" --include="*.py" --include="*.md" ` +
+      `--include="*.json" --include="*.txt" --include="*.sh" --include="*.yaml" --include="*.yml" ` +
+      `--exclude-dir=node_modules --exclude-dir=.git --exclude-dir=__pycache__ ` +
+      `"${pattern}" "${expanded}" 2>/dev/null | head -200`,
+      30_000
+    )
   } catch (e: any) {
     return `Error: ${e.message}`
   }

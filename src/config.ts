@@ -6,6 +6,7 @@ export interface MaudeConfig {
   model: string
   baseURL: string
   maxRounds: number
+  maxTokens: number   // estimated token limit for context warning (default 20k)
   debug: boolean
 }
 
@@ -13,6 +14,7 @@ const DEFAULTS: MaudeConfig = {
   model: "qwen2.5-coder:7b",
   baseURL: "http://localhost:11434/v1",
   maxRounds: 10,
+  maxTokens: 20000,
   debug: false,
 }
 

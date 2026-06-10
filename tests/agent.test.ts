@@ -15,7 +15,7 @@ import { chatCompletionStream } from "../src/llm.js"
 import { dispatchTool } from "../src/tools/index.js"
 
 const mockClient = {} as OpenAI
-const mockConfig = { model: "test-model", baseURL: "http://localhost", maxRounds: 5, debug: false }
+const mockConfig = { model: "test-model", baseURL: "http://localhost", maxRounds: 5, maxTokens: 20000, debug: false }
 
 beforeEach(() => {
   vi.clearAllMocks()

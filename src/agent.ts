@@ -121,8 +121,17 @@ async function executeToolCall(
 
   process.stdout.write(chalk.cyan(`⚙ ${name} `) + chalk.dim(JSON.stringify(args)) + "\n")
   const result = await dispatchTool(name, args)
-  const preview = result.length > 120 ? result.slice(0, 120) + "…" : result
-  process.stdout.write(chalk.dim(`  → ${preview}\n`))
+
+  if (name === "run_bash") {
+    // stdout was already streamed live; just show exit status
+    const exitMatch = result.match(/exit: (\d+)$/)
+    const code = exitMatch ? parseInt(exitMatch[1]) : "?"
+    const icon = code === 0 ? chalk.green("✓") : chalk.red("✗")
+    process.stdout.write(icon + chalk.dim(` exit ${code}\n`))
+  } else {
+    const preview = result.length > 120 ? result.slice(0, 120) + "…" : result
+    process.stdout.write(chalk.dim(`  → ${preview}\n`))
+  }
 
   // Track file modifications
   if ((name === "write_file" || name === "edit_file") && args.path && !result.startsWith("Error")) {
