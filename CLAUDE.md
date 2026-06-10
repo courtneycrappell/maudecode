@@ -94,13 +94,13 @@ maude --model qwen2.5-coder "review this file"
 
 ## Status
 
-- [ ] Scaffold project (package.json, tsconfig.json)
-- [ ] `src/llm.ts` — Ollama client
-- [ ] `src/tools/` — all 6 tools
-- [ ] `src/agent.ts` — agent loop
-- [ ] `src/repl.ts` — interactive REPL
-- [ ] `src/index.ts` — CLI entry point
-- [ ] End-to-end test: read a file, edit a file, run bash
+- [x] Scaffold project (package.json, tsconfig.json)
+- [x] `src/llm.ts` — Ollama client
+- [x] `src/tools/` — all 18 tools
+- [x] `src/agent.ts` — agent loop
+- [x] `src/repl.ts` — interactive REPL
+- [x] `src/index.ts` — CLI entry point
+- [x] End-to-end test: read a file, edit a file, run bash
 
 ## Notes
 - The default timeout for runBash is 10 seconds
